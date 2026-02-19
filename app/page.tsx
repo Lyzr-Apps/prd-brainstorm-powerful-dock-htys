@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { callAIAgent, AIAgentResponse } from '@/lib/aiAgent'
+import { callAIAgent, AIAgentResponse, uploadFiles, UploadResponse } from '@/lib/aiAgent'
 import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,7 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { Progress } from '@/components/ui/progress'
 import {
   FiSend,
   FiCheck,
@@ -30,6 +31,9 @@ import {
   FiX,
   FiMessageSquare,
   FiEye,
+  FiPaperclip,
+  FiUploadCloud,
+  FiFile,
 } from 'react-icons/fi'
 
 // ─── Constants ───
@@ -77,11 +81,42 @@ interface ChatMessage {
   content: string
   agentData?: AgentData
   timestamp: string
+  attachedFiles?: { name: string; size: string }[]
 }
 
 interface ApprovedSection {
   title: string
   content: string
+}
+
+interface AttachedFile {
+  file: File
+  name: string
+  size: string
+  uploading: boolean
+  uploaded: boolean
+  assetId?: string
+  error?: string
+}
+
+// ─── File upload prompt template ───
+const FILE_UPLOAD_PROMPT = `I have uploaded document(s) that contain information about my product idea. Please analyze the uploaded file(s) and extract answers to the following 8 key PRD questions:
+
+1. **Product/Feature Description:** What product or feature is being described?
+2. **Problem Statement:** What problem does it solve? Who experiences this problem?
+3. **Target Users:** Who are the target users/personas?
+4. **Goals & Objectives:** What are the primary goals and success metrics?
+5. **Use Cases:** What are the key use cases or user stories?
+6. **Requirements:** What are the functional, business, and technical requirements?
+7. **Competitive Landscape:** Who are the competitors or existing alternatives?
+8. **Risks & Constraints:** What are the known risks, constraints, or dependencies?
+
+Please extract as much detail as possible from the uploaded document(s) and present your findings. Then we can proceed with the PRD building process using this information.`
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
 // ─── Stage definitions ───
@@ -491,17 +526,38 @@ function MessageBubble({
   isLoading: boolean
 }) {
   if (message.role === 'user') {
+    const hasFiles = Array.isArray(message.attachedFiles) && message.attachedFiles.length > 0
     return (
       <div className="flex justify-end mb-4">
-        <div
-          className="max-w-[75%] px-4 py-3 rounded-2xl rounded-br-sm text-sm"
-          style={{
-            backgroundColor: 'hsl(25 55% 40%)',
-            color: 'hsl(40 30% 98%)',
-            lineHeight: '1.65',
-          }}
-        >
-          {message.content}
+        <div className="max-w-[75%] space-y-1.5">
+          {hasFiles && (
+            <div className="flex flex-wrap gap-1.5 justify-end">
+              {message.attachedFiles!.map((f, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px]"
+                  style={{
+                    backgroundColor: 'hsl(25 55% 35%)',
+                    color: 'hsl(40 30% 92%)',
+                  }}
+                >
+                  <FiFile className="w-3 h-3 shrink-0" />
+                  <span className="truncate max-w-[140px]">{f.name}</span>
+                  <span className="opacity-60">({f.size})</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div
+            className="px-4 py-3 rounded-2xl rounded-br-sm text-sm"
+            style={{
+              backgroundColor: 'hsl(25 55% 40%)',
+              color: 'hsl(40 30% 98%)',
+              lineHeight: '1.65',
+            }}
+          >
+            {message.content}
+          </div>
         </div>
       </div>
     )
@@ -761,34 +817,133 @@ export default function Page() {
   const [showSampleData, setShowSampleData] = useState(false)
   const [hasInitialized, setHasInitialized] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Scroll to bottom on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isLoading])
 
+  // Handle file selection
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    const newFiles: AttachedFile[] = Array.from(files).map((file) => ({
+      file,
+      name: file.name,
+      size: formatFileSize(file.size),
+      uploading: true,
+      uploaded: false,
+    }))
+
+    setAttachedFiles((prev) => [...prev, ...newFiles])
+    setIsUploading(true)
+    setUploadProgress(0)
+
+    // Upload each file
+    const totalFiles = newFiles.length
+    let completedFiles = 0
+
+    for (const attachedFile of newFiles) {
+      try {
+        const uploadResult: UploadResponse = await uploadFiles(attachedFile.file)
+        completedFiles++
+        setUploadProgress(Math.round((completedFiles / totalFiles) * 100))
+
+        if (uploadResult.success && uploadResult.asset_ids.length > 0) {
+          setAttachedFiles((prev) =>
+            prev.map((f) =>
+              f.name === attachedFile.name && f.uploading
+                ? { ...f, uploading: false, uploaded: true, assetId: uploadResult.asset_ids[0] }
+                : f
+            )
+          )
+        } else {
+          setAttachedFiles((prev) =>
+            prev.map((f) =>
+              f.name === attachedFile.name && f.uploading
+                ? { ...f, uploading: false, uploaded: false, error: uploadResult.error || 'Upload failed' }
+                : f
+            )
+          )
+        }
+      } catch {
+        completedFiles++
+        setUploadProgress(Math.round((completedFiles / totalFiles) * 100))
+        setAttachedFiles((prev) =>
+          prev.map((f) =>
+            f.name === attachedFile.name && f.uploading
+              ? { ...f, uploading: false, uploaded: false, error: 'Upload failed' }
+              : f
+          )
+        )
+      }
+    }
+
+    setIsUploading(false)
+    setUploadProgress(100)
+    // Reset the file input so the same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [])
+
+  // Remove an attached file
+  const removeAttachedFile = useCallback((name: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.name !== name))
+  }, [])
+
+  // Clear all attached files
+  const clearAttachedFiles = useCallback(() => {
+    setAttachedFiles([])
+    setUploadProgress(0)
+  }, [])
+
   // Send message to agent
   const sendMessage = useCallback(
-    async (text: string, showInChat: boolean = true) => {
-      if (!text.trim() || isLoading) return
+    async (text: string, showInChat: boolean = true, fileAssets?: string[], fileInfos?: { name: string; size: string }[]) => {
+      if ((!text.trim() && (!fileAssets || fileAssets.length === 0)) || isLoading) return
+
+      // Build the actual message to send
+      let messageToSend = text.trim()
+      const hasFileAttachments = fileAssets && fileAssets.length > 0
+
+      // If files are attached and no custom text, use the file upload prompt
+      if (hasFileAttachments && !messageToSend) {
+        messageToSend = FILE_UPLOAD_PROMPT
+      } else if (hasFileAttachments && messageToSend) {
+        // If user wrote something AND attached files, prepend context
+        messageToSend = `I have uploaded document(s) for context. ${messageToSend}\n\nPlease also analyze the uploaded file(s) and extract relevant information for the PRD, focusing on:\n1. Product/Feature Description\n2. Problem Statement\n3. Target Users\n4. Goals & Objectives\n5. Use Cases\n6. Requirements (Functional, Business, Technical)\n7. Competitive Landscape\n8. Risks & Constraints`
+      }
 
       if (showInChat) {
+        const displayContent = hasFileAttachments
+          ? (text.trim() || 'Uploaded document(s) for PRD analysis')
+          : text
         const userMsg: ChatMessage = {
           id: Date.now().toString(),
           role: 'user',
-          content: text,
+          content: displayContent,
           timestamp: new Date().toISOString(),
+          attachedFiles: fileInfos,
         }
         setMessages((prev) => [...prev, userMsg])
       }
       setInputValue('')
+      setAttachedFiles([])
+      setUploadProgress(0)
       setIsLoading(true)
       setErrorMessage('')
 
       try {
-        const result = await callAIAgent(text, AGENT_ID, { session_id: sessionId })
+        const result = await callAIAgent(messageToSend, AGENT_ID, {
+          session_id: sessionId,
+          assets: hasFileAttachments ? fileAssets : undefined,
+        })
         const agentData = parseAgentResponse(result)
 
         if (agentData) {
@@ -873,13 +1028,27 @@ export default function Page() {
     [sendMessage]
   )
 
+  // Send message with files helper
+  const handleSend = useCallback(() => {
+    const uploadedAssets = attachedFiles
+      .filter((f) => f.uploaded && f.assetId)
+      .map((f) => f.assetId!)
+    const fileInfos = attachedFiles
+      .filter((f) => f.uploaded && f.assetId)
+      .map((f) => ({ name: f.name, size: f.size }))
+    sendMessage(inputValue, true, uploadedAssets.length > 0 ? uploadedAssets : undefined, fileInfos.length > 0 ? fileInfos : undefined)
+  }, [inputValue, attachedFiles, sendMessage])
+
   // Handle Enter key
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      sendMessage(inputValue)
+      handleSend()
     }
   }
+
+  // Check if we can send (either have text or have uploaded files)
+  const canSend = !isLoading && !showSampleData && !isUploading && (inputValue.trim().length > 0 || attachedFiles.some((f) => f.uploaded && f.assetId))
 
   // Displayed data
   const displayMessages = showSampleData ? SAMPLE_MESSAGES : messages
@@ -1017,6 +1186,20 @@ export default function Page() {
                       <p className="text-xs max-w-sm" style={{ color: 'hsl(30 15% 45%)' }}>
                         The PRD Builder agent will guide you through creating a comprehensive Product Requirements Document with structured review checkpoints.
                       </p>
+                      <div
+                        className="mt-4 px-4 py-3 rounded-xl flex items-start gap-2.5 max-w-sm text-left"
+                        style={{ backgroundColor: 'hsl(40 25% 90%)', border: '1px dashed hsl(35 25% 82%)' }}
+                      >
+                        <FiUploadCloud className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'hsl(25 55% 40%)' }} />
+                        <div>
+                          <p className="text-xs font-medium" style={{ color: 'hsl(30 25% 18%)' }}>
+                            Have existing documents?
+                          </p>
+                          <p className="text-[11px] mt-0.5" style={{ color: 'hsl(30 15% 45%)' }}>
+                            Upload product briefs, specs, or notes using the paperclip button. The agent will extract answers to the 8 key PRD questions automatically.
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -1076,13 +1259,122 @@ export default function Page() {
                 style={{ backgroundColor: 'hsl(40 35% 98%)', borderTop: '1px solid hsl(35 25% 82%)' }}
               >
                 <div className="max-w-2xl mx-auto">
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept=".pdf,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,.pptx,.ppt,.rtf,.json"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+
+                  {/* Attached files chips */}
+                  {attachedFiles.length > 0 && (
+                    <div
+                      className="mb-2 p-2.5 rounded-xl space-y-2"
+                      style={{ backgroundColor: 'hsl(40 30% 96%)', border: '1px solid hsl(35 25% 82%)' }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'hsl(30 25% 18%)' }}>
+                          <FiUploadCloud className="w-3.5 h-3.5" style={{ color: 'hsl(25 55% 40%)' }} />
+                          <span>Attached Files ({attachedFiles.length})</span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={clearAttachedFiles}
+                          className="h-6 px-2 text-[10px]"
+                          style={{ color: 'hsl(30 15% 45%)' }}
+                        >
+                          Clear all
+                        </Button>
+                      </div>
+
+                      {isUploading && (
+                        <div className="space-y-1">
+                          <Progress value={uploadProgress} className="h-1.5" />
+                          <p className="text-[10px]" style={{ color: 'hsl(30 15% 45%)' }}>
+                            Uploading... {uploadProgress}%
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {attachedFiles.map((file, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-lg text-[11px] group"
+                            style={{
+                              backgroundColor: file.error
+                                ? 'hsl(0 65% 97%)'
+                                : file.uploaded
+                                ? 'hsl(40 25% 90%)'
+                                : 'hsl(40 20% 88%)',
+                              border: file.error
+                                ? '1px solid hsl(0 40% 85%)'
+                                : '1px solid hsl(35 25% 82%)',
+                              color: file.error ? 'hsl(0 65% 50%)' : 'hsl(30 25% 18%)',
+                            }}
+                          >
+                            {file.uploading ? (
+                              <FiLoader className="w-3 h-3 shrink-0 animate-spin" style={{ color: 'hsl(25 55% 40%)' }} />
+                            ) : file.error ? (
+                              <FiAlertTriangle className="w-3 h-3 shrink-0" />
+                            ) : (
+                              <FiFile className="w-3 h-3 shrink-0" style={{ color: 'hsl(25 55% 40%)' }} />
+                            )}
+                            <span className="truncate max-w-[120px]">{file.name}</span>
+                            <span className="opacity-50 ml-0.5">{file.size}</span>
+                            {file.uploaded && (
+                              <FiCheckCircle className="w-3 h-3 shrink-0 ml-0.5" style={{ color: 'hsl(25 55% 40%)' }} />
+                            )}
+                            <button
+                              onClick={() => removeAttachedFile(file.name)}
+                              className="ml-0.5 p-0.5 rounded opacity-40 hover:opacity-100 transition-opacity"
+                              style={{ color: 'hsl(30 25% 18%)' }}
+                            >
+                              <FiX className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {attachedFiles.some((f) => f.uploaded) && (
+                        <p className="text-[10px] italic" style={{ color: 'hsl(30 15% 45%)' }}>
+                          The agent will analyze your document(s) and extract answers to the 8 key PRD questions.
+                          You can add an optional message below or just hit send.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   <div
                     className="flex items-end gap-2 p-2 rounded-xl"
                     style={{ backgroundColor: 'hsl(40 30% 96%)', border: '1px solid hsl(35 25% 82%)' }}
                   >
+                    {/* File attach button */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isLoading || showSampleData || isUploading}
+                      className="h-9 w-9 p-0 shrink-0 rounded-lg"
+                      title="Attach files (PDF, DOC, TXT, etc.)"
+                      style={{ color: 'hsl(30 15% 45%)' }}
+                    >
+                      <FiPaperclip className="w-4 h-4" />
+                    </Button>
+
                     <Textarea
                       ref={textareaRef}
-                      placeholder={showSampleData ? 'Sample mode active - toggle off to chat' : 'Type your message...'}
+                      placeholder={
+                        showSampleData
+                          ? 'Sample mode active - toggle off to chat'
+                          : attachedFiles.some((f) => f.uploaded)
+                          ? 'Add a message (optional) or press send to analyze files...'
+                          : 'Type your message or attach a file...'
+                      }
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyDown={handleKeyDown}
@@ -1093,12 +1385,12 @@ export default function Page() {
                     />
                     <Button
                       size="sm"
-                      onClick={() => sendMessage(inputValue)}
-                      disabled={isLoading || !inputValue.trim() || showSampleData}
+                      onClick={handleSend}
+                      disabled={!canSend}
                       className="h-9 w-9 p-0 shrink-0 rounded-lg"
                       style={{
-                        backgroundColor: inputValue.trim() && !isLoading ? 'hsl(25 55% 40%)' : 'hsl(40 20% 88%)',
-                        color: inputValue.trim() && !isLoading ? 'hsl(40 30% 98%)' : 'hsl(30 15% 45%)',
+                        backgroundColor: canSend ? 'hsl(25 55% 40%)' : 'hsl(40 20% 88%)',
+                        color: canSend ? 'hsl(40 30% 98%)' : 'hsl(30 15% 45%)',
                       }}
                     >
                       {isLoading ? <FiLoader className="w-4 h-4 animate-spin" /> : <FiSend className="w-4 h-4" />}
@@ -1108,9 +1400,15 @@ export default function Page() {
                     <span className="text-[10px]" style={{ color: 'hsl(30 15% 45%)' }}>
                       Currently: <span className="font-medium" style={{ color: 'hsl(25 55% 40%)' }}>{getStageName(displayStage)}</span>
                     </span>
-                    <span className="text-[10px]" style={{ color: 'hsl(30 15% 45%)' }}>
-                      Shift+Enter for new line
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] flex items-center gap-1" style={{ color: 'hsl(30 15% 45%)' }}>
+                        <FiPaperclip className="w-2.5 h-2.5" />
+                        PDF, DOC, TXT
+                      </span>
+                      <span className="text-[10px]" style={{ color: 'hsl(30 15% 45%)' }}>
+                        Shift+Enter for new line
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
