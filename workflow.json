@@ -1,0 +1,32 @@
+{
+  "nodes": [
+    {
+      "id": "input_node",
+      "type": "Input",
+      "label": "User Chat Message",
+      "nodeCategory": "input"
+    },
+    {
+      "id": "prd_builder_agent",
+      "type": "Agent",
+      "label": "PRD Builder Agent",
+      "nodeCategory": "agent"
+    },
+    {
+      "id": "output_node",
+      "type": "Output",
+      "label": "PRD Response",
+      "nodeCategory": "end"
+    }
+  ],
+  "edges": [
+    {
+      "source": "input_node",
+      "target": "prd_builder_agent"
+    },
+    {
+      "source": "prd_builder_agent",
+      "target": "output_node"
+    }
+  ]
+}

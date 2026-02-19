@@ -1,0 +1,34 @@
+{
+  "agent_name": "PRD Builder Agent",
+  "agent_id": "69976ea431f64502bf319c80",
+  "description": "Expert Product Manager chatbot that gathers requirements through structured questioning, generates PRD sections (problem statement, goals, success metrics, use cases, technical/business/functional requirements, competitive analysis, risks), enforces staged human-in-the-loop reviews at 4 checkpoints, performs gap analysis on missing information, and advises on next steps. Maintains full conversation context across the review stages.",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "message": "string",
+    "current_stage": "string",
+    "review_action_needed": "boolean",
+    "section_title": "string",
+    "section_content": "string",
+    "approved_sections": [
+      "string"
+    ],
+    "gap_items": [
+      "string"
+    ]
+  },
+  "example_response": {
+    "message": "The agent's conversational response text",
+    "current_stage": "The current stage of the PRD building process",
+    "review_action_needed": false,
+    "section_title": "Title of the section being presented for review, empty string if none",
+    "section_content": "The drafted PRD section content for review, empty string if none",
+    "approved_sections": [
+      "sample string"
+    ],
+    "gap_items": [
+      "sample string"
+    ]
+  }
+}
