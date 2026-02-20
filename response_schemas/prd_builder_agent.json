@@ -1,7 +1,7 @@
 {
   "agent_name": "PRD Builder Agent",
   "agent_id": "69976ea431f64502bf319c80",
-  "description": "Expert Product Manager chatbot that gathers requirements through structured questioning, generates PRD sections (problem statement, goals, success metrics, use cases, technical/business/functional requirements, competitive analysis, risks), enforces staged human-in-the-loop reviews at 4 checkpoints, performs gap analysis on missing information, and advises on next steps. Maintains full conversation context across the review stages.",
+  "description": "Expert Product Manager chatbot with confidence scoring and self-reflection. Gathers requirements through structured questioning, generates PRD sections with accuracy assessments, enforces staged human-in-the-loop reviews at 4 checkpoints, performs gap analysis, and advises on next steps.",
   "agent_type": "json",
   "accessor": "result",
   "auto_generated": true,
@@ -12,80 +12,25 @@
     "section_title": "string",
     "section_content": "string",
     "approved_sections": ["string"],
-    "gap_items": ["string"]
+    "gap_items": ["string"],
+    "overall_confidence": "number",
+    "confidence_breakdown": [{"aspect": "string", "score": "number", "reasoning": "string"}],
+    "reflection": "string",
+    "accuracy_flags": ["string"]
   },
   "example_response": {
-    "message": "Welcome to PRD Builder Pro! I will guide you through creating a comprehensive Product Requirements Document with 4 review checkpoints. Let's start by understanding your product idea. What product or feature are you looking to build?",
+    "message": "Welcome to PRD Builder Pro! I will guide you through creating a comprehensive Product Requirements Document with 4 review checkpoints and built-in confidence scoring. Let's start by understanding your product idea. What product or feature are you looking to build?",
     "current_stage": "information_gathering",
     "review_action_needed": false,
     "section_title": "",
     "section_content": "",
     "approved_sections": [],
-    "gap_items": []
-  },
-  "response_format": {
-    "type": "json_schema",
-    "json_schema": {
-      "name": "AgentResponse",
-      "strict": true,
-      "schema": {
-        "type": "object",
-        "properties": {
-          "message": {
-            "type": "string",
-            "description": "The agent's conversational response text"
-          },
-          "current_stage": {
-            "type": "string",
-            "enum": [
-              "information_gathering",
-              "review_1_problem_goals",
-              "review_2_use_cases",
-              "review_3_requirements",
-              "review_4_risks",
-              "gap_analysis",
-              "completed"
-            ],
-            "description": "The current stage of the PRD building process"
-          },
-          "review_action_needed": {
-            "type": "boolean",
-            "description": "Whether the user needs to approve or edit a section"
-          },
-          "section_title": {
-            "type": "string",
-            "description": "Title of the section being presented for review, empty string if none"
-          },
-          "section_content": {
-            "type": "string",
-            "description": "The drafted PRD section content for review, empty string if none"
-          },
-          "approved_sections": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "List of section names that have been approved so far"
-          },
-          "gap_items": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "List of identified gaps or missing information, empty array if none"
-          }
-        },
-        "required": [
-          "message",
-          "current_stage",
-          "review_action_needed",
-          "section_title",
-          "section_content",
-          "approved_sections",
-          "gap_items"
-        ],
-        "additionalProperties": false
-      }
-    }
+    "gap_items": [],
+    "overall_confidence": 95,
+    "confidence_breakdown": [
+      {"aspect": "Greeting and process explanation", "score": 98, "reasoning": "Standard introductory message with no assumptions"}
+    ],
+    "reflection": "This is an introductory message with high confidence as no assumptions are being made about the user's product. Confidence will naturally decrease as I begin inferring details from user input.",
+    "accuracy_flags": []
   }
 }

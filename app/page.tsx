@@ -34,6 +34,13 @@ import {
   FiPaperclip,
   FiUploadCloud,
   FiFile,
+  FiActivity,
+  FiInfo,
+  FiChevronDown,
+  FiChevronUp,
+  FiBarChart2,
+  FiTarget,
+  FiShield,
 } from 'react-icons/fi'
 
 // ─── Constants ───
@@ -65,6 +72,12 @@ const THEME_VARS = {
 } as React.CSSProperties
 
 // ─── Types ───
+interface ConfidenceItem {
+  aspect: string
+  score: number
+  reasoning: string
+}
+
 interface AgentData {
   message: string
   current_stage: string
@@ -73,6 +86,10 @@ interface AgentData {
   section_content: string
   approved_sections: string[]
   gap_items: string[]
+  overall_confidence: number
+  confidence_breakdown: ConfidenceItem[]
+  reflection: string
+  accuracy_flags: string[]
 }
 
 interface ChatMessage {
@@ -137,13 +154,19 @@ const SAMPLE_MESSAGES: ChatMessage[] = [
     role: 'agent',
     content: '',
     agentData: {
-      message: 'Welcome to PRD Builder Pro! I will guide you through creating a comprehensive Product Requirements Document with 4 review checkpoints. Let us start by understanding your product idea. What product or feature are you looking to build?',
+      message: 'Welcome to PRD Builder Pro! I will guide you through creating a comprehensive Product Requirements Document with 4 review checkpoints and built-in confidence scoring. Let us start by understanding your product idea. What product or feature are you looking to build?',
       current_stage: 'information_gathering',
       review_action_needed: false,
       section_title: '',
       section_content: '',
       approved_sections: [],
       gap_items: [],
+      overall_confidence: 95,
+      confidence_breakdown: [
+        { aspect: 'Greeting and process explanation', score: 98, reasoning: 'Standard introductory message with no assumptions' },
+      ],
+      reflection: 'This is an introductory message with high confidence as no assumptions are being made about the user\'s product. Confidence will naturally decrease as I begin inferring details from user input.',
+      accuracy_flags: [],
     },
     timestamp: new Date(Date.now() - 300000).toISOString(),
   },
@@ -165,6 +188,20 @@ const SAMPLE_MESSAGES: ChatMessage[] = [
       section_content: '## Problem Statement\n\nRemote teams struggle with fragmented communication, lack of real-time visibility into project progress, and manual reporting processes that consume valuable time.\n\n## Goals\n\n- **Primary Goal:** Provide a unified platform for remote team collaboration and project management\n- **Secondary Goal:** Reduce time spent on status reporting by 60% through automation\n- **Tertiary Goal:** Improve task completion rates by 25% through better visibility and accountability\n\n## Success Metrics\n\n- Daily active users within target organizations\n- Average time-to-completion for tasks\n- Reduction in weekly status meeting duration\n- User satisfaction score (NPS > 50)',
       approved_sections: [],
       gap_items: [],
+      overall_confidence: 72,
+      confidence_breakdown: [
+        { aspect: 'Problem Statement', score: 85, reasoning: 'Directly derived from user description of remote teams and collaboration needs' },
+        { aspect: 'Primary Goal', score: 80, reasoning: 'Clear alignment with user-stated requirements' },
+        { aspect: 'Reporting reduction by 60%', score: 45, reasoning: 'Specific percentage is an industry benchmark assumption, not validated with user' },
+        { aspect: 'Task completion improvement by 25%', score: 40, reasoning: 'Estimated based on typical project management tool outcomes, not user-provided' },
+        { aspect: 'NPS > 50 target', score: 35, reasoning: 'Standard SaaS benchmark, may not align with user\'s actual goals' },
+      ],
+      reflection: 'The problem statement is strongly grounded in the user\'s description. However, the quantitative success metrics (60% reporting reduction, 25% task completion improvement, NPS > 50) are industry benchmarks I\'ve applied, not figures the user provided. I recommend the user validate these targets against their specific context. The goals section would benefit from more detail about the competitive differentiation.',
+      accuracy_flags: [
+        'Success metrics use industry benchmarks, not user-validated targets',
+        'Competitive positioning assumptions may not reflect user\'s specific market',
+        'No information gathered yet about technical constraints or team size',
+      ],
     },
     timestamp: new Date(Date.now() - 180000).toISOString(),
   },
@@ -186,6 +223,20 @@ const SAMPLE_MESSAGES: ChatMessage[] = [
       section_content: '## Core Use Cases\n\n### UC-1: Task Creation and Assignment\n- **Actor:** Team Lead\n- **Flow:** Create task with description, priority, deadline, and assignee\n- **Outcome:** Task appears in assignee dashboard with notification\n\n### UC-2: Real-time Collaboration\n- **Actor:** Team Members\n- **Flow:** Multiple users edit shared documents, comment on tasks, and receive live updates\n- **Outcome:** All changes visible instantly to all participants\n\n### UC-3: Automated Reporting\n- **Actor:** Project Manager\n- **Flow:** System auto-generates weekly progress reports based on task data\n- **Outcome:** Report delivered via email/Slack with key metrics',
       approved_sections: ['Problem Statement & Goals'],
       gap_items: [],
+      overall_confidence: 68,
+      confidence_breakdown: [
+        { aspect: 'UC-1: Task Creation', score: 82, reasoning: 'Core feature directly mentioned by user (task tracking)' },
+        { aspect: 'UC-2: Real-time Collaboration', score: 78, reasoning: 'User explicitly mentioned real-time collaboration features' },
+        { aspect: 'UC-3: Automated Reporting', score: 75, reasoning: 'User mentioned automated reporting, flow details are inferred' },
+        { aspect: 'Actor definitions', score: 55, reasoning: 'Assumed standard roles (Team Lead, Team Members, PM) without user confirmation' },
+        { aspect: 'Delivery via email/Slack', score: 40, reasoning: 'Common integration assumption, user has not specified delivery channels' },
+      ],
+      reflection: 'The three core use cases align well with the features the user described (task tracking, real-time collaboration, automated reporting). However, I\'ve assumed standard organizational roles as actors without user confirmation. The specific delivery mechanisms (email/Slack) are assumptions. Additional use cases around onboarding, permissions, and notifications may be missing. I\'d recommend asking about integration preferences and user role hierarchy.',
+      accuracy_flags: [
+        'Actor roles assumed without user input',
+        'Integration channels (email/Slack) are assumptions',
+        'May be missing use cases for user onboarding and permissions',
+      ],
     },
     timestamp: new Date(Date.now() - 60000).toISOString(),
   },
@@ -286,6 +337,15 @@ function parseAgentResponse(result: AIAgentResponse): AgentData | null {
     parsed = agentData as Record<string, unknown>
   }
 
+  const rawBreakdown = Array.isArray(parsed?.confidence_breakdown) ? parsed.confidence_breakdown : []
+  const confidenceBreakdown: ConfidenceItem[] = rawBreakdown
+    .filter((item: unknown): item is Record<string, unknown> => item !== null && typeof item === 'object')
+    .map((item: Record<string, unknown>) => ({
+      aspect: typeof item.aspect === 'string' ? item.aspect : '',
+      score: typeof item.score === 'number' ? item.score : 0,
+      reasoning: typeof item.reasoning === 'string' ? item.reasoning : '',
+    }))
+
   return {
     message: (typeof parsed?.message === 'string' ? parsed.message : '') || result?.response?.message || '',
     current_stage: (typeof parsed?.current_stage === 'string' ? parsed.current_stage : '') || 'information_gathering',
@@ -294,6 +354,10 @@ function parseAgentResponse(result: AIAgentResponse): AgentData | null {
     section_content: typeof parsed?.section_content === 'string' ? parsed.section_content : '',
     approved_sections: Array.isArray(parsed?.approved_sections) ? (parsed.approved_sections as string[]) : [],
     gap_items: Array.isArray(parsed?.gap_items) ? (parsed.gap_items as string[]) : [],
+    overall_confidence: typeof parsed?.overall_confidence === 'number' ? parsed.overall_confidence : 0,
+    confidence_breakdown: confidenceBreakdown,
+    reflection: typeof parsed?.reflection === 'string' ? parsed.reflection : '',
+    accuracy_flags: Array.isArray(parsed?.accuracy_flags) ? (parsed.accuracy_flags as string[]) : [],
   }
 }
 
@@ -513,6 +577,202 @@ function GapItemsDisplay({ items }: { items: string[] }) {
   )
 }
 
+// ─── Confidence Score Helpers ───
+function getConfidenceColor(score: number): string {
+  if (score >= 90) return 'hsl(140 50% 40%)'
+  if (score >= 70) return 'hsl(25 55% 40%)'
+  if (score >= 50) return 'hsl(45 80% 45%)'
+  if (score >= 30) return 'hsl(20 80% 50%)'
+  return 'hsl(0 65% 50%)'
+}
+
+function getConfidenceLabel(score: number): string {
+  if (score >= 90) return 'Very High'
+  if (score >= 70) return 'High'
+  if (score >= 50) return 'Moderate'
+  if (score >= 30) return 'Low'
+  return 'Very Low'
+}
+
+function getConfidenceBgColor(score: number): string {
+  if (score >= 90) return 'hsl(140 40% 95%)'
+  if (score >= 70) return 'hsl(25 40% 95%)'
+  if (score >= 50) return 'hsl(45 50% 95%)'
+  if (score >= 30) return 'hsl(20 50% 95%)'
+  return 'hsl(0 50% 96%)'
+}
+
+// ─── Confidence & Reflection Panel ───
+function ConfidenceReflectionPanel({ data }: { data: AgentData }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const [showBreakdown, setShowBreakdown] = useState(false)
+
+  const hasConfidence = data.overall_confidence > 0
+  const hasReflection = data.reflection && data.reflection.length > 0
+  const hasBreakdown = Array.isArray(data.confidence_breakdown) && data.confidence_breakdown.length > 0
+  const hasFlags = Array.isArray(data.accuracy_flags) && data.accuracy_flags.length > 0
+
+  if (!hasConfidence && !hasReflection && !hasBreakdown && !hasFlags) return null
+
+  const confidence = data.overall_confidence
+  const confColor = getConfidenceColor(confidence)
+  const confLabel = getConfidenceLabel(confidence)
+  const confBg = getConfidenceBgColor(confidence)
+
+  return (
+    <div className="mt-2">
+      {/* Compact confidence bar - always visible */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all duration-200 hover:shadow-sm"
+        style={{
+          backgroundColor: confBg,
+          border: `1px solid ${confColor}20`,
+        }}
+      >
+        <FiTarget className="w-3.5 h-3.5 shrink-0" style={{ color: confColor }} />
+        <div className="flex-1 flex items-center gap-2">
+          <span className="font-medium" style={{ color: 'hsl(30 25% 18%)' }}>
+            Confidence:
+          </span>
+          {/* Mini progress bar */}
+          <div className="flex-1 h-1.5 rounded-full max-w-[120px]" style={{ backgroundColor: `${confColor}20` }}>
+            <div
+              className="h-1.5 rounded-full transition-all duration-700"
+              style={{ backgroundColor: confColor, width: `${confidence}%` }}
+            />
+          </div>
+          <span className="font-semibold tabular-nums" style={{ color: confColor }}>
+            {confidence}%
+          </span>
+          <Badge
+            variant="outline"
+            className="text-[9px] px-1.5 py-0"
+            style={{ borderColor: confColor, color: confColor }}
+          >
+            {confLabel}
+          </Badge>
+        </div>
+        {hasFlags && (
+          <div className="flex items-center gap-1" style={{ color: 'hsl(45 80% 45%)' }}>
+            <FiShield className="w-3 h-3" />
+            <span className="text-[10px]">{data.accuracy_flags.length}</span>
+          </div>
+        )}
+        {isExpanded ? (
+          <FiChevronUp className="w-3.5 h-3.5 shrink-0" style={{ color: 'hsl(30 15% 45%)' }} />
+        ) : (
+          <FiChevronDown className="w-3.5 h-3.5 shrink-0" style={{ color: 'hsl(30 15% 45%)' }} />
+        )}
+      </button>
+
+      {/* Expanded panel */}
+      {isExpanded && (
+        <div
+          className="mt-1.5 rounded-lg overflow-hidden"
+          style={{
+            backgroundColor: 'hsl(40 35% 98%)',
+            border: '1px solid hsl(35 25% 82%)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+          }}
+        >
+          {/* Reflection section */}
+          {hasReflection && (
+            <div className="px-3.5 py-3" style={{ borderBottom: '1px solid hsl(35 25% 90%)' }}>
+              <div className="flex items-center gap-1.5 mb-2">
+                <FiActivity className="w-3.5 h-3.5" style={{ color: 'hsl(25 55% 40%)' }} />
+                <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'hsl(25 55% 40%)' }}>
+                  Agent Reflection
+                </span>
+              </div>
+              <p className="text-xs leading-relaxed" style={{ color: 'hsl(30 25% 25%)', lineHeight: '1.65' }}>
+                {data.reflection}
+              </p>
+            </div>
+          )}
+
+          {/* Accuracy flags */}
+          {hasFlags && (
+            <div className="px-3.5 py-3" style={{ borderBottom: hasBreakdown ? '1px solid hsl(35 25% 90%)' : 'none' }}>
+              <div className="flex items-center gap-1.5 mb-2">
+                <FiShield className="w-3.5 h-3.5" style={{ color: 'hsl(45 80% 45%)' }} />
+                <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'hsl(45 80% 40%)' }}>
+                  Accuracy Flags
+                </span>
+              </div>
+              <div className="space-y-1">
+                {data.accuracy_flags.map((flag, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-start gap-2 px-2.5 py-1.5 rounded text-[11px]"
+                    style={{ backgroundColor: 'hsl(45 50% 95%)', color: 'hsl(30 30% 30%)' }}
+                  >
+                    <FiInfo className="w-3 h-3 mt-0.5 shrink-0" style={{ color: 'hsl(45 80% 45%)' }} />
+                    <span>{flag}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Confidence breakdown */}
+          {hasBreakdown && (
+            <div className="px-3.5 py-3">
+              <button
+                onClick={() => setShowBreakdown(!showBreakdown)}
+                className="flex items-center gap-1.5 mb-2 w-full"
+              >
+                <FiBarChart2 className="w-3.5 h-3.5" style={{ color: 'hsl(25 55% 40%)' }} />
+                <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'hsl(25 55% 40%)' }}>
+                  Confidence Breakdown ({data.confidence_breakdown.length} items)
+                </span>
+                {showBreakdown ? (
+                  <FiChevronUp className="w-3 h-3 ml-auto" style={{ color: 'hsl(30 15% 45%)' }} />
+                ) : (
+                  <FiChevronDown className="w-3 h-3 ml-auto" style={{ color: 'hsl(30 15% 45%)' }} />
+                )}
+              </button>
+
+              {showBreakdown && (
+                <div className="space-y-2">
+                  {data.confidence_breakdown.map((item, idx) => {
+                    const itemColor = getConfidenceColor(item.score)
+                    return (
+                      <div
+                        key={idx}
+                        className="rounded-md px-2.5 py-2"
+                        style={{ backgroundColor: 'hsl(40 30% 96%)' }}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[11px] font-medium truncate pr-2" style={{ color: 'hsl(30 25% 18%)' }}>
+                            {item.aspect}
+                          </span>
+                          <span className="text-[11px] font-semibold tabular-nums shrink-0" style={{ color: itemColor }}>
+                            {item.score}%
+                          </span>
+                        </div>
+                        <div className="w-full h-1 rounded-full mb-1" style={{ backgroundColor: `${itemColor}20` }}>
+                          <div
+                            className="h-1 rounded-full transition-all duration-500"
+                            style={{ backgroundColor: itemColor, width: `${item.score}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] italic" style={{ color: 'hsl(30 15% 45%)' }}>
+                          {item.reasoning}
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Chat Message Bubble ───
 function MessageBubble({
   message,
@@ -594,6 +854,8 @@ function MessageBubble({
         )}
 
         {data?.gap_items && <GapItemsDisplay items={data.gap_items} />}
+
+        {data && <ConfidenceReflectionPanel data={data} />}
       </div>
     </div>
   )
